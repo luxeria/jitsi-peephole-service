@@ -12,11 +12,11 @@ import (
 )
 
 var (
-	roomName = envVar("PEEPHOLE_ROOM_NAME")
-	httpAddr = envVar("PEEPHOLE_HTTP_ADDR")
+	roomName = envRequired("PEEPHOLE_ROOM_NAME")
+	httpAddr = envOrDefault("PEEPHOLE_HTTP_ADDR", ":9339")
 
-	prosodyHTTPHost = envVar("XMPP_SERVER")
-	prosodyHTTPPort = envVar("PROSODY_HTTP_PORT")
+	prosodyHTTPHost = envOrDefault("XMPP_SERVER", "xmpp.meet.jitsi")
+	prosodyHTTPPort = envOrDefault("PROSODY_HTTP_PORT", "5280")
 
 	roomCensusURL = (&url.URL{
 		Scheme: "http",
@@ -25,11 +25,19 @@ var (
 	}).String()
 )
 
-func envVar(name string) string {
+func envRequired(name string) string {
 	val := os.Getenv(name)
 	if val == "" {
 		slog.Error("missing environment variable", slog.String("name", name))
 		os.Exit(1)
+	}
+	return val
+}
+
+func envOrDefault(name, fallback string) string {
+	val := os.Getenv(name)
+	if val == "" {
+		return fallback
 	}
 	return val
 }
