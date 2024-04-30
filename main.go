@@ -9,11 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
+	"time"
 )
 
 var (
-	roomName = envRequired("PEEPHOLE_ROOM_NAME")
-	httpAddr = envOrDefault("PEEPHOLE_HTTP_ADDR", ":9339")
+	roomName    = envRequired("PEEPHOLE_ROOM_NAME")
+	httpAddr    = envOrDefault("PEEPHOLE_HTTP_ADDR", ":9339")
+	cacheExpiry = envDuration("PEEPHOLE_CACHE_EXPIRY", 5*time.Second)
 
 	prosodyHTTPHost = envOrDefault("XMPP_SERVER", "xmpp.meet.jitsi")
 	prosodyHTTPPort = envOrDefault("PROSODY_HTTP_PORT", "5280")
@@ -42,6 +45,21 @@ func envOrDefault(name, fallback string) string {
 	return val
 }
 
+func envDuration(name string, fallback time.Duration) time.Duration {
+	val := os.Getenv(name)
+	if val == "" {
+		return fallback
+	}
+
+	t, err := time.ParseDuration(val)
+	if err != nil {
+		slog.Error("invalid environment variable", slog.String("name", name), slog.Any("error", err))
+		os.Exit(1)
+	}
+
+	return t
+}
+
 type room struct {
 	RoomName     string `json:"room_name"`
 	Participants int    `json:"participants"`
@@ -62,11 +80,25 @@ func (l *roomList) UnmarshalJSON(data []byte) error {
 	return err
 }
 
-func peephole(w http.ResponseWriter) error {
+var cache struct {
+	sync.Mutex
+	lastUpdated time.Time
+	value       room
+}
+
+func fetchRoom() (*room, error) {
+	cache.Lock()
+	defer cache.Unlock()
+
+	// Return cached value if not yet expired
+	if time.Since(cache.lastUpdated) < cacheExpiry {
+		return &cache.value, nil
+	}
+
 	// Fetch "room census" from internal API
 	resp, err := http.Get(roomCensusURL)
 	if err != nil {
-		return fmt.Errorf("failed to fetch room census from %q: %w", roomCensusURL, err)
+		return nil, fmt.Errorf("failed to fetch room census from %q: %w", roomCensusURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -76,7 +108,7 @@ func peephole(w http.ResponseWriter) error {
 	}
 	err = json.NewDecoder(resp.Body).Decode(&payload)
 	if err != nil {
-		return fmt.Errorf("failed to parse room census payload: %w", err)
+		return nil, fmt.Errorf("failed to parse room census payload: %w", err)
 	}
 
 	// Extract configured room from room list. If no census for the configured
@@ -92,9 +124,21 @@ func peephole(w http.ResponseWriter) error {
 		}
 	}
 
+	cache.lastUpdated = time.Now()
+	cache.value = found
+
+	return &found, nil
+}
+
+func peephole(w http.ResponseWriter) error {
+	room, err := fetchRoom()
+	if err != nil {
+		return err
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	return json.NewEncoder(w).Encode(found)
+	return json.NewEncoder(w).Encode(room)
 }
 
 func main() {
