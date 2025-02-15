@@ -63,7 +63,7 @@ func envDuration(name string, fallback time.Duration) time.Duration {
 type room struct {
 	RoomName     string `json:"room_name"`
 	Participants int    `json:"participants"`
-	CreatedTime  int64  `json:"created_time,omitempty"`
+	CreatedTime  int64  `json:"created_time,string,omitempty"`
 }
 
 type roomList []room
